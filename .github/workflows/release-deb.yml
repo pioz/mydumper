@@ -4,6 +4,8 @@ on:
   push:
     tags:
       - 'v*'
+    branches:
+      - 'release/**'
   workflow_dispatch:
     inputs:
       tag:
@@ -20,16 +22,25 @@ jobs:
       DISTRO: noble
       ARCH: amd64
     steps:
-      - name: Resolve tag
-        run: echo "TAG=${{ inputs.tag || github.ref_name }}" >> "$GITHUB_ENV"
-
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.tag || github.ref_name }}
 
+      - name: Resolve tag
+        run: |
+          if [ -n "${{ inputs.tag }}" ]; then
+            TAG="${{ inputs.tag }}"
+          elif [ "${{ github.ref_type }}" = "tag" ]; then
+            TAG="${{ github.ref_name }}"
+          else
+            source VERSION
+            TAG="v${ver}-${rev}"
+          fi
+          echo "TAG=$TAG" >> "$GITHUB_ENV"
+
       - name: Set up MySQL APT repository
         run: |
-          curl -fsSL https://repo.mysql.com/RPM-GPG-KEY-mysql-2023 | sudo gpg --dearmor -o /usr/share/keyrings/mysql.gpg
+          curl -fsSL https://repo.mysql.com/RPM-GPG-KEY-mysql-2025 | sudo gpg --dearmor -o /usr/share/keyrings/mysql.gpg
           echo "deb [signed-by=/usr/share/keyrings/mysql.gpg] http://repo.mysql.com/apt/ubuntu/ ${DISTRO} mysql-8.4" | sudo tee /etc/apt/sources.list.d/mysql.list
           sudo apt-get update
 
