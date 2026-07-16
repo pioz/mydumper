@@ -27,20 +27,35 @@ jobs:
         with:
           ref: ${{ inputs.tag || github.ref_name }}
 
+      - name: Set up MySQL APT repository
+        run: |
+          curl -fsSL https://repo.mysql.com/RPM-GPG-KEY-mysql-2023 | sudo gpg --dearmor -o /usr/share/keyrings/mysql.gpg
+          echo "deb [signed-by=/usr/share/keyrings/mysql.gpg] http://repo.mysql.com/apt/ubuntu/ ${DISTRO} mysql-8.4" | sudo tee /etc/apt/sources.list.d/mysql.list
+          sudo apt-get update
+
       - name: Install build dependencies
         run: |
-          sudo apt-get update
-          sudo apt-get install -y cmake gcc g++ libglib2.0-dev libmariadb-dev libmariadb-dev-compat libpcre2-dev libssl-dev zlib1g-dev fakeroot
+          sudo apt-get install -y cmake gcc g++ libglib2.0-dev libmysqlclient-dev libpcre2-dev libssl-dev zlib1g-dev libzstd-dev fakeroot
+          mysql_config --version
+          # Force static linking of libmysqlclient: FindMySQL resolves each -l
+          # token with find_library, which falls back to the .a when no .so exists
+          sudo find /usr/lib -name 'libmysqlclient.so' -delete
+          test -n "$(find /usr/lib -name 'libmysqlclient.a' | head -1)"
 
       - name: Build
         run: |
-          cmake -B build -DCMAKE_BUILD_TYPE=Release
+          cmake -B build -DCMAKE_BUILD_TYPE=Release -DCMAKE_C_STANDARD_LIBRARIES="-lzstd -lresolv -ldl -lpthread -lm"
           cmake --build build -j"$(nproc)"
 
       - name: Smoke test
         run: |
           build/mydumper --version
           build/myloader --version
+          build/mydumper --version | grep -i "built against MySQL"
+          if ldd build/mydumper | grep -iE "mysql|mariadb"; then
+            echo "ERROR: MySQL client library is dynamically linked" >&2
+            exit 1
+          fi
 
       - name: Package deb
         run: |
@@ -53,7 +68,7 @@ jobs:
           sed -i "s/%{version}/${PKGVER}-${PKGREV}/" "$ROOT/DEBIAN/control"
           sed -i "s/%{distro}/${DISTRO}/" "$ROOT/DEBIAN/control"
           sed -i "s/%{architecture}/${ARCH}/" "$ROOT/DEBIAN/control"
-          sed -i "s/^Pre-Depends: .*/&, libmariadb3, zlib1g, libssl3t64/" "$ROOT/DEBIAN/control"
+          sed -i "s/^Pre-Depends: .*/&, zlib1g, libssl3t64, libzstd1/" "$ROOT/DEBIAN/control"
           install -m 0555 build/mydumper build/myloader "$ROOT/usr/bin/"
           install -m 0664 mydumper.cnf "$ROOT/etc/"
           cd pkg
